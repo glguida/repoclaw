@@ -183,3 +183,10 @@ git agents start
 ```
 
 Do not delete task/job logs or transcripts if you need the run history.
+
+## License
+
+RepoClaw is MIT licensed. See `LICENSE`.
+
+Portions of the Markdown workspace material are derived from OpenClaw, also MIT
+licensed. See `THIRD_PARTY_NOTICES.md`.
