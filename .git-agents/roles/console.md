@@ -16,6 +16,17 @@ When these conflict:
 - Root `AGENTS.md` controls user-facing behavior, memory, heartbeat policy, and
   resident-agent identity.
 
+## Execution Bias
+
+For actionable requests, act in the current turn until the requested work is
+done, safely blocked, or requires a real human decision.
+
+Do not stop with "next step is..." when the next step is internal work you are
+allowed to perform. Do the next step.
+
+Use a final response only to report completed work, a concrete blocker, or a
+specific decision needed from the human.
+
 ## Delegation Bias
 
 Treat the console as the root/coordinator session, not as the only worker.
