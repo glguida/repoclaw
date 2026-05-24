@@ -1,0 +1,560 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Run one named GitAgents agent and render JSON events to transcript logs."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+
+NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def die(message: str, code: int = 1) -> None:
+    print(f"error: {message}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+class ShutdownRequested(Exception):
+    def __init__(self, signum: int) -> None:
+        super().__init__(f"signal {signum}")
+        self.signum = signum
+
+
+def validate_name(label: str, value: str) -> None:
+    if not value or not NAME_RE.match(value):
+        die(f"invalid {label} '{value}' - only alphanumeric, dot, underscore, and hyphen allowed")
+
+
+def write_file(path: Path, text: str) -> None:
+    path.write_text(text + "\n", encoding="utf-8")
+
+
+def append_job_log(job_dir: Path, summary: str, detail: str) -> None:
+    with (job_dir / "log.md").open("a", encoding="utf-8") as f:
+        f.write(f"## {timestamp()} - {summary}\n\n")
+        f.write(detail.rstrip() + "\n\n")
+
+
+def remove_file(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+
+def write_runtime_pids(agent_dir: Path, job_dir: Path | None = None, proc: subprocess.Popen[str] | None = None) -> None:
+    write_file(agent_dir / "runner.pid", str(os.getpid()))
+    if job_dir is not None:
+        write_file(job_dir / "runner.pid", str(os.getpid()))
+    if proc is None:
+        return
+    write_file(agent_dir / "engine.pid", str(proc.pid))
+    if job_dir is not None:
+        write_file(job_dir / "engine.pid", str(proc.pid))
+
+
+def clear_runtime_pids(agent_dir: Path, job_dir: Path | None = None) -> None:
+    for name in ("engine.pid", "runner.pid"):
+        remove_file(agent_dir / name)
+        if job_dir is not None:
+            remove_file(job_dir / name)
+
+
+def terminate_process(proc: subprocess.Popen[str], timeout: float = 3) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        proc.kill()
+    proc.wait(timeout=timeout)
+
+
+def run_bin(root: Path, *args: str, capture: bool = True) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.run(
+        [str(root / "bin" / args[0]), *args[1:]],
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.PIPE if capture else None,
+        check=False,
+    )
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip()
+        stdout = (proc.stdout or "").strip()
+        detail = stderr or stdout or f"exit status {proc.returncode}"
+        die(f"{args[0]} failed: {detail}", proc.returncode)
+    return proc
+
+
+def state_dir(root: Path) -> Path:
+    env_state = os.environ.get("GIT_AGENTS_STATE_DIR", "").strip()
+    if env_state:
+        return Path(env_state).expanduser().resolve()
+    return root / "state"
+
+
+class Transcript:
+    def __init__(self, paths: Iterable[Path], mirror_stdout: bool = False, mirror_prefix: str = "") -> None:
+        self.files = [path.open("a", encoding="utf-8", buffering=1) for path in paths]
+        self.section: str | None = None
+        self.mirror_stdout = mirror_stdout
+        self.mirror_prefix = mirror_prefix
+        self.mirror_line_start = True
+
+    def close(self) -> None:
+        for f in self.files:
+            f.close()
+
+    def write(self, text: str) -> None:
+        if not text:
+            return
+        for f in self.files:
+            f.write(text)
+            f.flush()
+        if self.mirror_stdout:
+            sys.stdout.write(self.prefix_mirror_text(text))
+            sys.stdout.flush()
+
+    def prefix_mirror_text(self, text: str) -> str:
+        if not self.mirror_prefix:
+            return text
+        out: list[str] = []
+        for ch in text:
+            if self.mirror_line_start and ch != "\n":
+                out.append(self.mirror_prefix)
+                self.mirror_line_start = False
+            out.append(ch)
+            if ch == "\n":
+                self.mirror_line_start = True
+        return "".join(out)
+
+    def line(self, text: str = "") -> None:
+        self.write(text + "\n")
+
+    def heading(self, title: str) -> None:
+        if self.section != title:
+            self.write(f"\n### {title}\n\n")
+            self.section = title
+
+    def event(self, title: str, detail: str | None = None) -> None:
+        self.section = None
+        self.line()
+        self.line(f"[{timestamp()}] {title}")
+        if detail:
+            self.line(detail.rstrip())
+
+
+class Renderer:
+    def __init__(self, transcript: Transcript, engine: str) -> None:
+        self.t = transcript
+        self.engine = engine
+
+    def render_line(self, raw: str) -> None:
+        raw = raw.rstrip("\n")
+        if not raw:
+            return
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            if raw.lstrip().startswith("{"):
+                return
+            else:
+                self.t.event("output", raw)
+            return
+        if not isinstance(event, dict):
+            return
+
+        if self.engine == "pi":
+            self.render_pi(event)
+
+    def text_block(self, title: str, text: str) -> None:
+        if not text:
+            return
+        self.t.heading(title)
+        self.t.write(text)
+
+    def render_pi(self, event: dict[str, Any]) -> None:
+        typ = event.get("type")
+        if typ == "session":
+            return
+        if typ in ("agent_start", "agent_end", "turn_start", "turn_end", "message_start", "message_end"):
+            return
+        if typ == "message_update":
+            msg_event = event.get("assistantMessageEvent")
+            if isinstance(msg_event, dict):
+                msg_type = msg_event.get("type")
+                delta = msg_event.get("delta")
+                if msg_type == "text_delta":
+                    self.text_block("Assistant", str(delta or ""))
+                    return
+                if msg_type == "thinking_delta":
+                    self.text_block("Thinking", str(delta or ""))
+                    return
+                if msg_type in (
+                    "thinking_start",
+                    "thinking_end",
+                    "text_start",
+                    "text_end",
+                    "toolcall_start",
+                    "toolcall_delta",
+                    "toolcall_end",
+                ):
+                    return
+            self.render_generic(event)
+            return
+        if typ == "tool_execution_start":
+            detail = self.command_text(event.get("args"))
+            self.tool_block(str(event.get("toolName") or "tool"), detail)
+            return
+        if typ == "tool_execution_update":
+            return
+        if typ == "tool_execution_end":
+            title = str(event.get("toolName") or "tool")
+            if event.get("isError"):
+                title += " (error)"
+            self.tool_block(title, self.limit_text(self.result_text(event.get("result"))))
+            return
+        if typ in ("queue_update", "compaction_start", "compaction_end", "auto_retry_start", "auto_retry_end"):
+            self.t.event(f"pi {typ}", self.scalar_metadata(event, skip={"type"}))
+            return
+
+        self.render_generic(event)
+
+    def render_generic(self, event: dict[str, Any]) -> None:
+        return
+
+    def tool_block(self, name: str, detail: str | None = None) -> None:
+        self.t.heading("Tool Call")
+        self.t.line(name)
+        if detail:
+            self.t.line(detail.rstrip())
+        self.t.line()
+
+    def scalar_metadata(self, value: dict[str, Any], skip: set[str] | None = None) -> str:
+        skip = skip or set()
+        lines: list[str] = []
+        for key, item in value.items():
+            if key in skip:
+                continue
+            if item in (None, "", [], {}):
+                continue
+            if isinstance(item, (dict, list, tuple)):
+                continue
+            lines.append(f"{key}: {self.limit_text(str(item))}")
+        return "\n".join(lines)
+
+    def plain_text(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (int, float, bool)):
+            return str(value)
+        if isinstance(value, dict):
+            return self.result_text(value)
+        if isinstance(value, (list, tuple)):
+            parts = [self.plain_text(item) for item in value]
+            return "\n".join(part for part in parts if part)
+        return str(value)
+
+    def command_text(self, value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            command = value.get("command") or value.get("cmd")
+            if command:
+                return str(command)
+            parts = []
+            for key in ("path", "file", "pattern", "query"):
+                if key in value and not isinstance(value[key], (dict, list, tuple)):
+                    parts.append(f"{key}: {value[key]}")
+            return "\n".join(parts)
+        return self.plain_text(value)
+
+    def result_text(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (int, float, bool)):
+            return str(value)
+        if isinstance(value, (list, tuple)):
+            parts = [self.result_text(item) for item in value]
+            return "\n".join(part for part in parts if part)
+        if isinstance(value, dict):
+            for key in ("text", "output", "stdout", "stderr", "error", "message", "delta"):
+                if key in value:
+                    text = self.result_text(value[key])
+                    if text:
+                        return text
+            content = value.get("content")
+            if isinstance(content, (list, tuple)):
+                parts = []
+                for item in content:
+                    text = self.result_text(item)
+                    if text:
+                        parts.append(text)
+                return "\n".join(parts)
+            return self.scalar_metadata(value)
+        return str(value)
+
+    def limit_text(self, text: str, limit: int = 4000) -> str:
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + f"\n... truncated {len(text) - limit} chars"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run one named GitAgents agent and render JSON output to transcript.log."
+    )
+    engine = parser.add_mutually_exclusive_group()
+    engine.add_argument("--pi", action="store_const", const="pi", dest="engine")
+    parser.set_defaults(engine="pi")
+    parser.add_argument("--headless", action="store_true", help="Do not mirror rendered transcript output to stdout")
+    parser.add_argument("-m", "--model")
+    parser.add_argument("role")
+    parser.add_argument("agent_name")
+    return parser.parse_args()
+
+
+def read_repo_root(root: Path) -> Path | None:
+    env_root = os.environ.get("GIT_AGENTS_REPO_ROOT", "").strip()
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+    try:
+        text = (state_dir(root) / "repo-root").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return Path(text).expanduser().resolve() if text else None
+
+
+def protocol_path(root: Path, repo_root: Path | None) -> Path:
+    if repo_root is not None:
+        return repo_root / ".git-agents" / "AGENTS.md"
+    return root / "AGENTS.md"
+
+
+def build_command(
+    engine: str,
+    model: str | None,
+    agent_dir: Path,
+    prompt: str,
+) -> list[str]:
+    if engine == "pi":
+        cmd = ["pi", "-p", "--mode", "json"]
+        if model:
+            cmd.extend(["--model", model])
+        cmd.extend(["--session-dir", str(agent_dir / "pi-session"), prompt])
+        return cmd
+    raise AssertionError(engine)
+
+
+def main() -> int:
+    args = parse_args()
+    validate_name("role", args.role)
+    validate_name("agent ID", args.agent_name)
+
+    script_dir = Path(__file__).resolve().parent
+    root = script_dir.parent
+    state_root = state_dir(root)
+    repo_root = read_repo_root(root)
+
+    if shutil.which(args.engine) is None:
+        die(f"required command not found: {args.engine}")
+
+    role_file = root / "roles" / f"{args.role}.md"
+    if not role_file.is_file():
+        die(f"role file not found: roles/{args.role}.md")
+
+    agent_dir_out = run_bin(root, "agent-new", args.agent_name, args.role).stdout.strip()
+    if not agent_dir_out:
+        die("agent-new returned no agent directory")
+    agent_dir = Path(agent_dir_out)
+
+    write_file(agent_dir / "engine", args.engine)
+    if args.model:
+        write_file(agent_dir / "model", args.model)
+    write_file(agent_dir / "last_started_at", timestamp())
+    write_runtime_pids(agent_dir)
+
+    while True:
+        run_bin(root, "job-wait", "-r", args.role, capture=True)
+        claim = run_bin(root, "job-claim", "-r", args.role, "--agent-id", args.agent_name).stdout.strip()
+        if claim.startswith("CLAIMED: "):
+            job_id = claim.removeprefix("CLAIMED: ").strip()
+            break
+        if claim == "NO_JOBS":
+            continue
+        die(f"unexpected job-claim output: {claim}")
+
+    write_file(agent_dir / "current-job", job_id)
+
+    job_dir = state_root / "jobs" / job_id
+    write_runtime_pids(agent_dir, job_dir)
+    rules_path = protocol_path(root, repo_root)
+    prompt = "\n".join(
+        part
+        for part in (
+            f"You are agent {args.agent_name}.",
+            f"Your GitAgents root is: {root}",
+            f"Your GitAgents state directory is: {state_root}",
+            f"Your target repository root is: {repo_root}" if repo_root else "",
+            (
+                f"Read {rules_path} before working. It is the GitAgents-owned "
+                "generic protocol installed by `git agents init` and refreshed "
+                "with `git agents update`. "
+                f"Use the GitAgents command helpers under {root / 'bin'}."
+            ),
+            "Treat bin/ and roles/ as relative to the GitAgents root. Treat tasks/, jobs/, agents/, runs/, and logs/ as relative to the GitAgents state directory.",
+        )
+        if part
+    )
+    write_file(agent_dir / "prompt.md", prompt)
+
+    agent_transcript = agent_dir / "transcript.log"
+    agent_error = agent_dir / "error.log"
+    for path in (agent_transcript, agent_error):
+        path.touch()
+
+    append_job_log(
+        job_dir,
+        "Transcript",
+        f"Agent transcript: agents/{args.agent_name}/transcript.log",
+    )
+
+    transcript = Transcript(
+        [agent_transcript],
+        mirror_stdout=not args.headless,
+        mirror_prefix=f"{args.agent_name}: ",
+    )
+    error_files = [agent_error.open("a", encoding="utf-8", buffering=1)]
+    proc: subprocess.Popen[str] | None = None
+    shutdown_signals = (signal.SIGTERM, signal.SIGINT)
+    previous_handlers = {signum: signal.getsignal(signum) for signum in shutdown_signals}
+
+    def request_shutdown(signum: int, _frame: Any) -> None:
+        raise ShutdownRequested(signum)
+
+    try:
+        for signum in shutdown_signals:
+            signal.signal(signum, request_shutdown)
+
+        transcript.event(
+            "run start",
+            "\n".join(
+                part
+                for part in (
+                    f"agent: {args.agent_name}",
+                    f"role: {args.role}",
+                    f"job: {job_id}",
+                    f"engine: {args.engine}",
+                    f"model: {args.model}" if args.model else "",
+                )
+                if part
+            ),
+        )
+
+        cmd = build_command(args.engine, args.model, agent_dir, prompt)
+        proc = subprocess.Popen(
+            cmd,
+            cwd=repo_root or root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            start_new_session=True,
+        )
+        write_runtime_pids(agent_dir, job_dir, proc)
+
+        def copy_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                for f in error_files:
+                    f.write(line)
+                    f.flush()
+                if sys.stderr.isatty():
+                    sys.stderr.write(f"\033[31m{args.agent_name}: {line}\033[0m")
+                else:
+                    sys.stderr.write(f"{args.agent_name}: {line}")
+                sys.stderr.flush()
+
+        stderr_thread = threading.Thread(target=copy_stderr, daemon=True)
+        stderr_thread.start()
+
+        renderer = Renderer(transcript, args.engine)
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            renderer.render_line(line)
+
+        rc = proc.wait()
+        stderr_thread.join(timeout=1)
+
+        transcript.event("run end", f"exit: {rc}")
+        return rc
+    except ShutdownRequested as exc:
+        transcript.event("run interrupted", f"signal: {exc.signum}")
+        return 128 + exc.signum
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+        if proc is not None and proc.poll() is None:
+            terminate_process(proc)
+        subprocess.run(
+            [
+                str(root / "bin" / "job-release"),
+                job_id,
+                "--agent-id",
+                args.agent_name,
+                "-m",
+                "Agent process exited while the job was still owned by this agent; releasing back to pending.",
+            ],
+            cwd=root,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        clear_runtime_pids(agent_dir, job_dir)
+        transcript.close()
+        for f in error_files:
+            f.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
