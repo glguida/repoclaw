@@ -1,9 +1,3 @@
-/.git-agents/state/
+/.git-multiagent/state/
 __pycache__/
 *.pyc
-
-# GitAgents packaged roles materialized by `git agents update` but not used by
-# this OpenClaw-like team.
-/.git-agents/roles/committer.md
-/.git-agents/roles/implementer.md
-/.git-agents/roles/reviewer.md

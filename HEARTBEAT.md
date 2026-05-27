@@ -6,11 +6,10 @@ read_when:
 ---
 
 ```markdown
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
-
-# Add tasks below when you want the agent to check something periodically.
+# Heartbeat interval is configured in `.git-multiagent/team.toml`.
+# Add optional periodic checks below. If there is nothing to do, stay silent.
 ```
 
 ## Related
 
-- [Heartbeat config](/gateway/config-agents)
+- Heartbeat config in `.git-multiagent/team.toml`

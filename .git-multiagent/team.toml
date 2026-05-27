@@ -1,0 +1,23 @@
+# OpenClaw-like dynamic work uses one interactive root agent plus a planner
+# and a standing pool of subagents.
+
+[[agent]]
+name = "agent"
+role = "agent"
+mode = "interactive"
+options = { heartbeat = 15 }
+
+[[agent]]
+name = "planner-1"
+role = "planner"
+mode = "worker"
+
+[[agent]]
+name = "subagent-1"
+role = "subagent"
+mode = "worker"
+
+[[agent]]
+name = "subagent-2"
+role = "subagent"
+mode = "worker"

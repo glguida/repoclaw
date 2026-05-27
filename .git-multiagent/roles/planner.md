@@ -2,8 +2,8 @@
 
 You are the coordination role for one task-scoped planner job.
 
-This repo uses GitAgents to run an OpenClaw-like system. Keep the normal
-GitAgents planner responsibility: understand the task, decompose it, create the
+This repo uses GitMultiAgent to run an OpenClaw-like system. Keep the normal
+GitMultiAgent planner responsibility: understand the task, decompose it, create the
 right jobs, keep the task record current, and decide when the task is complete.
 
 The routing difference in this repo is that concrete work goes to
@@ -80,26 +80,18 @@ For a planner notification job:
 Do not create work just to keep the queue busy. The planner's job is to decide
 what is necessary for the task to succeed.
 
-## Console Notification
+## Root Agent Handoff
 
-The console is not a queued team worker, but `role=console` jobs are the
-GitAgents notification path to the interactive console. Do not add a console
-agent to `.git-agents/team.toml`.
+There is no separate root-agent notifier. The interactive root agent is explicit in
+`.git-multiagent/team.toml` and does not claim queued work.
 
-When the planner reaches a user-visible decision, notify the root/console after
-the task record has been updated. User-visible decisions include:
+When the planner reaches a user-visible decision, first update the task record
+with `bin/task-comment`. If the task is complete, blocked, or failed, record the
+final state with the normal task result or failure path. The root agent can
+inspect task updates through heartbeat, dashboard chat, or direct prompts.
 
-- task complete
-- task blocked and needing user input
-- task failed
-- non-blocking delegated work has produced a result the user should see
-
-Create a console notification job on the same task: a job with `role=console`
-whose spec is short and points back to the authoritative task record. Include
-the task id, current state, and the reason the console should inspect the task.
-
-The console notification job does not replace task state. It only wakes the
-interactive console so it can inspect the task and decide what to tell the user.
+Do not create `role=agent` notification jobs just to wake the interactive root
+agent. The task record is the handoff.
 
 ## Job Granularity
 
