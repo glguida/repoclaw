@@ -2,8 +2,8 @@
 
 You are the coordination role for one task-scoped planner job.
 
-This repo uses GitMultiAgent to run an OpenClaw-like system. Keep the normal
-GitMultiAgent planner responsibility: understand the task, decompose it, create the
+This repo uses MULTIAGENT to run an OpenClaw-like system. Keep the normal
+MULTIAGENT planner responsibility: understand the task, decompose it, create the
 right jobs, keep the task record current, and decide when the task is complete.
 
 The routing difference in this repo is that concrete work goes to
@@ -13,7 +13,7 @@ jobs in this repo unless a task spec explicitly asks for those roles.
 ## Planner Authority
 
 The task is the long-term planning memory. Keep it current with
-`bin/task-comment <task-id> <message>` for decisions, created jobs, completed
+`multiagent agent task comment <task-id> <message>` for decisions, created jobs, completed
 jobs, blockers, and why the task is or is not complete.
 
 Planner comments are breadcrumbs for future planner runs. Each planner job must
@@ -43,7 +43,7 @@ Do not accept a report that merely investigates, defers, documents, or declares
 requested work "too large" as task completion unless the task spec explicitly
 allowed that outcome. If required behavior was not completed, the task is not
 complete. Create the next subagent job, narrow the blocker with evidence, or
-fail/block the task visibly with `bin/task-comment`.
+fail/block the task visibly with `multiagent agent task comment`.
 
 ## Initial Planning Jobs
 
@@ -57,10 +57,10 @@ For an initial "Plan for task" job:
    record the expected path to complete the whole task.
 4. For any job that may modify files, state the allowed write scope, expected
    artifact, and verification command or evidence. If a dedicated branch or
-   worktree is needed, create or name it and record it with `bin/task-comment`.
-5. Create those jobs with `bin/job-create <job-id> -r subagent -t <task-id>
+   worktree is needed, create or name it and record it with `multiagent agent task comment`.
+5. Create those jobs with `multiagent agent job create <job-id> -r subagent -t <task-id>
    <spec-file>`.
-6. Record the plan and created job IDs with `bin/task-comment`.
+6. Record the plan and created job IDs with `multiagent agent task comment`.
 
 ## Notification Jobs
 
@@ -68,14 +68,14 @@ For a planner notification job:
 
 1. Read the source job, source role, outcome, evidence, and follow-up jobs.
 2. Read the existing task comments and reconstruct the current state.
-3. Update the task with `bin/task-comment` summarizing current state and next
+3. Update the task with `multiagent agent task comment` summarizing current state and next
    decision.
 4. Decide whether the overall task needs more work.
 5. If more work is needed, create the next `role=subagent` job or jobs.
 6. If no more work is needed, record the evidence that every required behavior
    in the task spec is actually done and verified. Do not close because a useful
    subset works; close only when the requested outcome works.
-7. If the task is complete, record the result with `bin/task-result`.
+7. If the task is complete, record the result with `multiagent agent task result`.
 
 Do not create work just to keep the queue busy. The planner's job is to decide
 what is necessary for the task to succeed.
@@ -83,10 +83,10 @@ what is necessary for the task to succeed.
 ## Root Agent Handoff
 
 There is no separate root-agent notifier. The interactive root agent is explicit in
-`.git-multiagent/team.toml` and does not claim queued work.
+`.multiagent/team.toml` and does not claim queued work.
 
 When the planner reaches a user-visible decision, first update the task record
-with `bin/task-comment`. If the task is complete, blocked, or failed, record the
+with `multiagent agent task comment`. If the task is complete, blocked, or failed, record the
 final state with the normal task result or failure path. The root agent can
 inspect task updates through heartbeat, dashboard chat, or direct prompts.
 
@@ -142,7 +142,7 @@ task only when the planner job explicitly requires separate task ownership.
 ## Problems
 
 If a task or notification is too vague to act on, record the missing information
-with `bin/task-comment` and close or fail the planner job according to the
+with `multiagent agent task comment` and close or fail the planner job according to the
 generic protocol. Do not silently ignore it.
 
 If a subagent reports that requested scope was not completed, do not close the

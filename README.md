@@ -6,8 +6,8 @@ It gives a repo its own persistent AI presence: an interactive root agent you ca
 memory files, heartbeat behavior, task history, and a small worker team for
 planning and delegated work.
 
-RepoClaw is implemented with GitMultiAgent. GitMultiAgent provides the process model,
-tasks, jobs, roles, state directory, and interactive agent plumbing. RepoClaw is the
+RepoClaw runs on the `multiagent` command. The runtime provides processes,
+tasks, jobs, roles, state, and interactive-agent plumbing; RepoClaw is the
 resident agent layer that lives inside a repository and learns that repository
 over time.
 
@@ -20,9 +20,10 @@ notes, task history, and local habits. Different repositories should not share
 the same working memory unless you explicitly want that.
 
 A RepoClaw instance belongs to the repository it serves. It reads that repo's
-root `AGENTS.md`, keeps runtime state under that repo's `.git-multiagent/state/`,
-and can grow project-specific files such as `MEMORY.md`, `USER.md`,
-`IDENTITY.md`, and daily notes.
+root `AGENTS.md`, keeps repository config in `.multiagent/`, stores runtime
+state in the user-level `~/.multiagent/state/<instance-id>/` tree, and can
+grow project-specific files such as `MEMORY.md`, `USER.md`, `IDENTITY.md`,
+and daily notes.
 
 This repository is the reusable base. Concrete instances should live in their
 own repositories.
@@ -37,7 +38,7 @@ RepoClaw gives a git repo:
 - configured heartbeat pings so the interactive root agent can notice work without constant prompting;
 - a planner role for organizing delegated work;
 - standing subagents for bounded background investigation or checks;
-- task/job based communication through GitMultiAgent;
+- task/job based communication through MULTIAGENT;
 - restart recovery so the interactive root agent can read its transcript and resume context.
 
 It is useful when you want a repository to have an ongoing agent presence rather
@@ -45,34 +46,45 @@ than only ad hoc chat sessions.
 
 ## Basic Use
 
-Start the workspace:
+Recommended: start RepoClaw in Docker and mount only the directories it should
+inspect or edit:
 
 ```sh
-git multiagent start
+multiagent docker start "$PWD" --mount /path/to/project:rw
+```
+
+Use one `--mount <directory>:ro` or `--mount <directory>:rw` flag for each
+external directory RepoClaw needs. This keeps RepoClaw away from the full host
+filesystem by default.
+
+For a trusted host-local run, start the workspace directly:
+
+```sh
+multiagent local start
 ```
 
 Talk to the interactive root agent:
 
 ```sh
-git multiagent prompt "hello"
+multiagent local prompt agent "hello"
 ```
 
 Check status:
 
 ```sh
-git multiagent status
+multiagent local status
 ```
 
 Stop it:
 
 ```sh
-git multiagent stop
+multiagent local stop
 ```
 
 Restart an already-running workspace:
 
 ```sh
-git multiagent start --restart
+multiagent local restart
 ```
 
 ## First Run
@@ -90,19 +102,20 @@ for every future instance.
 ## Using It With Another Git Repo
 
 Create a RepoClaw instance for a project by copying or cloning this base into
-the project workspace you want the agent to serve. Then start GitMultiAgent from
-that repo root.
+the project workspace you want the agent to serve. Then start that RepoClaw
+workspace with `multiagent`, preferably through Docker with explicit mounts.
 
 Typical flow:
 
 1. Create or clone a repo-specific RepoClaw workspace.
-2. Start it with `git multiagent start`.
-3. Talk to it with `git multiagent prompt`.
+2. Start it with `multiagent docker start <repoclaw-dir> --mount <project-dir>:rw`.
+3. Talk to it with `multiagent local prompt agent "hello"`.
 4. Let bootstrap create the repo-specific identity and memory.
 5. Commit those repo-specific files in that instance repo.
 
 The important rule is separation: each target repository can have its own
-RepoClaw, with its own `.git-multiagent/state/`, memory, and habits.
+RepoClaw, with its own `.multiagent/team.toml`, user-level runtime state,
+memory, and habits.
 
 ## Files You Edit
 
@@ -113,38 +126,39 @@ The main user-facing files are:
 - `SOUL.md`: default identity and continuity guidance;
 - `HEARTBEAT.md`: heartbeat notes;
 - `TOOLS.md`: local tool notes;
-- `SPAWN.md`: how delegation maps to GitMultiAgent tasks and jobs.
+- `SPAWN.md`: how delegation maps to MULTIAGENT tasks and jobs.
 
-Roles live under `.git-multiagent/roles/`.
+Roles live under `.multiagent/roles/`.
 
 Most day-to-day customization happens in the root Markdown files and in
 instance-specific memory files.
 
 ## Runtime State
 
-Runtime state is generated under:
+Runtime state is generated under the MULTIAGENT registry, not inside the repo:
 
 ```text
-.git-multiagent/state/
+~/.multiagent/state/<instance-id>/
 ```
 
 That directory contains pids, transcripts, job state, logs, and Pi session data.
-It is intentionally ignored by git.
+The repo should track `.multiagent/team.toml` and role overrides, not runtime
+state.
 
 Useful debug files include:
 
 ```text
-.git-multiagent/state/agents/agent/transcript.log
-.git-multiagent/state/agents/agent/error.log
-.git-multiagent/state/logs/supervisor.log
-.git-multiagent/state/logs/heartbeat.log
+~/.multiagent/state/<instance-id>/agents/agent/transcript.log
+~/.multiagent/state/<instance-id>/agents/agent/error.log
+~/.multiagent/state/<instance-id>/logs/supervisor.log
+~/.multiagent/state/<instance-id>/logs/heartbeat.log
 ```
 
-Do not commit `.git-multiagent/state/`.
+Do not create or commit `.multiagent/state/`; if it appears, remove it.
 
 ## Heartbeats
 
-Heartbeat is configured per interactive agent in `.git-multiagent/team.toml`.
+Heartbeat is configured per interactive agent in `.multiagent/team.toml`.
 This base RepoClaw instance sets the root agent heartbeat to 15 minutes:
 
 ```toml
@@ -164,19 +178,19 @@ If not, it should stay silent.
 Stop the system first:
 
 ```sh
-git multiagent stop
+multiagent local stop
 ```
 
-Then remove only the interactive root agent state if you want a clean interactive root agent:
+Then reset only the interactive root agent if you want a clean interactive root agent:
 
 ```sh
-rm -rf .git-multiagent/state/agents/agent
+multiagent local agents reset agent --force
 ```
 
 Start again:
 
 ```sh
-git multiagent start
+multiagent local start
 ```
 
 Do not delete task/job logs or transcripts if you need the run history.

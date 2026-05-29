@@ -139,14 +139,14 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 - **Discord links:** Wrap multiple links in `<>` to suppress embeds: `<https://example.com>`
 - **WhatsApp:** No headers — use **bold** or CAPS for emphasis
 
-## GitMultiAgent Subagents
+## MULTIAGENT Subagents
 
-This workspace runs OpenClaw-like liveness on top of GitMultiAgent. The important
+This workspace runs OpenClaw-like liveness on top of MULTIAGENT. The important
 primitive is the task record: agents communicate by updating tasks and jobs, not
 by private chat.
 
 Use subagents when a request benefits from parallel investigation, bounded
-background work, or an independent check. Subagents are standing GitMultiAgent team
+background work, or an independent check. Subagents are standing MULTIAGENT team
 workers using the `subagent` role. Spawning creates a task of type `subagents`;
 it does not create new agents.
 
@@ -155,12 +155,12 @@ it does not create new agents.
 Read `SPAWN.md` before spawning subagent work.
 
 There is no separate `spawn_agent` tool in this workspace. The interactive root agent already
-has the GitMultiAgent task-creation mechanism. To delegate OpenClaw-style subagent
-work, create a normal GitMultiAgent task whose spec says `type: subagents`. The
-initial GitMultiAgent planner job then plans the task and creates one or more
+has the MULTIAGENT task-creation mechanism. To delegate OpenClaw-style subagent
+work, create a normal MULTIAGENT task whose spec says `type: subagents`. The
+initial MULTIAGENT planner job then plans the task and creates one or more
 `role=subagent` jobs on that task.
 
-A task type by itself does not schedule work in current GitMultiAgent. Queued
+A task type by itself does not schedule work in current MULTIAGENT. Queued
 workers claim jobs by role, so a subagent task is live only after a pending
 `role=planner` or `role=subagent` job exists on that task. The planner is the
 normal path from task creation to subagent jobs.
@@ -174,25 +174,25 @@ The spawn request should include:
 - verification or evidence requested
 - whether the parent/root is blocked on the result
 
-Do not create agents as part of delegation. Do not edit `.git-multiagent/team.toml`
+Do not create agents as part of delegation. Do not edit `.multiagent/team.toml`
 as part of delegation. If the needed task or job cannot be created, report the
-actual GitMultiAgent command failure instead of pretending a subagent was spawned.
+actual MULTIAGENT command failure instead of pretending a subagent was spawned.
 
 ### Communication Rules
 
 - The task is the shared channel between root agent and subagents.
-- Use `task-comment` for progress, handoffs, and final subagent results.
+- Use `multiagent agent task comment` for progress, handoffs, and final subagent results.
 - Planner-to-root-agent handoff happens through task updates after the planner
   has updated the task record. The interactive root agent is explicit in
-  `.git-multiagent/team.toml` and does not claim queued work; do not create
+  `.multiagent/team.toml` and does not claim queued work; do not create
   `role=agent` notification jobs.
 - Use job logs and transcripts for detailed evidence.
-- Do not edit `.git-multiagent/team.toml` as part of spawning. That file configures
+- Do not edit `.multiagent/team.toml` as part of spawning. That file configures
   the standing subagent pool.
 - Do not delete subagent directories, transcripts, job logs, or task history
   just because a subagent is finished.
 - A subagent job is retired by completing, failing, or releasing that job. The
-  worker and its record stay in GitMultiAgent state.
+  worker and its record stay in MULTIAGENT state.
 
 ### Result Handling
 

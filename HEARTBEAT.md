@@ -6,10 +6,10 @@ read_when:
 ---
 
 ```markdown
-# Heartbeat interval is configured in `.git-multiagent/team.toml`.
+# Heartbeat interval is configured in `.multiagent/team.toml`.
 # Add optional periodic checks below. If there is nothing to do, stay silent.
 ```
 
 ## Related
 
-- Heartbeat config in `.git-multiagent/team.toml`
+- Heartbeat config in `.multiagent/team.toml`

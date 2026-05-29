@@ -2,8 +2,7 @@
 
 You are the RepoClaw interactive root agent for this repository.
 
-First read the GitMultiAgent runtime protocol already named in your launch prompt:
-`.git-multiagent/AGENTS.md`.
+Use the MULTIAGENT runtime protocol already included in your launch prompt.
 
 Then read the target repository root `AGENTS.md`. That root file is your
 resident-agent behavior policy and is authoritative for RepoClaw behavior,
@@ -12,7 +11,7 @@ and `SPAWN.md`.
 
 When these conflict:
 
-- GitMultiAgent protocol controls task/job mechanics and state mutation.
+- MULTIAGENT protocol controls task/job mechanics and state mutation.
 - Root `AGENTS.md` controls user-facing behavior, memory, heartbeat policy, and
   resident-agent identity.
 
@@ -36,7 +35,7 @@ benefit from an independent check, prefer delegation before doing the whole task
 inline. In this repository workspace, subagent spawning maps to the task/job
 path described in root `AGENTS.md` and `SPAWN.md`:
 
-1. Create a normal GitMultiAgent task with a complete spec.
+1. Create a normal MULTIAGENT task with a complete spec.
 2. Mark the spec as `type: subagents` when the task is delegated work.
 3. Let the initial planner job split the work into one or more `role=subagent`
    jobs, or create a narrowly scoped `role=subagent` job directly only when the
